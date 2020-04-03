@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>server</title>
+  <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css" integrity="sha384-Vkoo8x4CGsO3+Hhxv8T/Q5PaXtkKtu6ug5TOeNV6gBiFeWPGFN9MuhOf23Q9Ifjh" crossorigin="anonymous">
+</head>
+
+<body>
+  <div class="container-dev">
+    <div class="row">
+      <div class="col-sm">
+        <p class="h4">Computer Camera: Local</p>
+        <video autoplay id="selfView"></video>
+      </div>
+
+      <div class="col-sm">
+        <p class="h4">External Frames: Remote</p>
+        <div id="remoteViewContainer"></div>
+      </div>
+
+      <div class="col-sm">
+        <div id="textRoom" style="display: none">
+          <div id="messagesContent">
+            <h3>Chat:</h3>
+          </div>
+
+          <div class="form-group">
+            <input type="text" class="form-control" id="textRoomInput" placeholder="message">
+          </div>
+
+          <button onclick="messageRoom();" type="button" class="btn btn-primary">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="container row" style="text-align: center; display: inline;">
+      <div id="roomIdContainer">
+        <div class="form-group">
+          <label for="roomId">Connection Room Code</label>
+          <input type="number" class="form-control" id="roomId" placeholder="000000" style="width: 200px; text-align: center; margin: 0 auto;">
+          <small id="roomIdHelp" class="form-text text-muted">We'll never share your code with anyone else.</small>
+        </div>
+
+        <button onclick="initRoom();" type="button" class="btn btn-primary">Create or Join Room</button>
+      </div>
+    </div>
+
+  </div>
+</body>
+<style>
+  .remoteView { width: 100%; height: 100%; }
+  #remoteViewContainer { display: initial; }
+</style>
+<script src="/socket.io/socket.io.js"></script>
+<script type="text/javascript">
+  var socket = io();
+  var RTCPeerConnection =
+          window.RTCPeerConnection ||
+          window.mozRTCPeerConnection ||
+          window.webkitRTCPeerConnection ||
+          window.msRTCPeerConnection;
+  var RTCSessionDescription =
+          window.RTCSessionDescription ||
+          window.mozRTCSessionDescription ||
+          window.webkitRTCSessionDescription ||
+          window.msRTCSessionDescription;
+  navigator.getUserMedia =
+          navigator.getUserMedia ||
+          navigator.mozGetUserMedia ||
+          navigator.webkitGetUserMedia ||
+          navigator.msGetUserMedia;
+  var stunConfig = {
+    iceServers: [{url: 'stun:stun.l.google.com:19302'},
+      {url: 'stun:global.stun.twilio.com:3478?transport=udp'}]
+  };
+  var configuration = stunConfig;
+  var selfView = document.getElementById('selfView');
+  var remoteViewContainer = document.getElementById('remoteViewContainer');
+  var peersList = {};
+  var localStream;
+  var dataChannel;
+  var dataRoomId;
+
+  function getLocalStream() {
+    navigator.getUserMedia({
+              audio: true,
+              video: true,
+            },
+            function(stream) {
+      localStream = stream;
+      selfView.srcObject = stream;
+      selfView.muted = true;
+      },
+            logError,
+    );
+  }
+
+  function join(roomID) {
+    socket.emit('join', roomID, function(socketIds) {
+      console.log('join', socketIds);
+      for (let i in socketIds) createPC(socketIds[i], true);
+    });
+  }
+
+  function createPC(socketId, isOffer) {
+    const peer = new RTCPeerConnection(configuration);
+    peersList = {
+      ...peersList,
+      [socketId]: peer,
+    };
+
+    peer.onicecandidate = event => {
+      if (event.candidate)
+        socket.emit('exchange', {to: socketId, candidate: event.candidate});
+    };
+
+    peer.onnegotiationneeded = () => {
+      if (isOffer) {
+        peer.createOffer(function(desc) {
+          peer.setLocalDescription(desc, function() {
+            socket.emit('exchange', {to: socketId, sdp: peer.localDescription});
+            }, logError);
+        }, logError);
+      }
+    };
+
+    peer.onaddstream = function(event) {
+      let element = document.createElement('video');
+      element.classList.add('remoteView');
+      element.id = 'remoteView' + socketId;
+      element.autoplay = 'autoplay';
+      element.srcObject = event.stream;
+      remoteViewContainer.appendChild(element);
+    };
+
+    peer.addStream(localStream);
+
+    peer.oniceconnectionstatechange = function(event) {
+      if (event.target.iceConnectionState === 'connected') {
+        dataChannel = peer.createDataChannel(dataRoomId);
+        dataChannel.onerror = function(error) {
+          console.log('dataChannel.onerror', error);
+        };
+
+        dataChannel.onmessage = function(event) {
+          console.log('dataChannel.onmessage:', event.data);
+          let content = document.getElementById('messagesContent');
+          content.innerHTML =
+                  content.innerHTML + '<p>' + socketId + ': ' + event.data + '</p>';
+        };
+
+        dataChannel.onopen = function() {
+          console.log('dataChannel.onopen');
+          var textRoom = document.getElementById('textRoom');
+          textRoom.style.display = 'block';
+        };
+
+        dataChannel.onclose = function() {
+          console.log('dataChannel.onclose');
+        };
+
+        peer.ondatachannel = dataChannel;
+      }
+    };
+
+    peer.onsignalingstatechange = function(event) {};
+
+    peer.onremovestream = event => {
+      /* console.log('on remove stream', event.stream); */
+    };
+
+    return peer;
+  }
+
+  function exchange(data) {
+    let fromId = data.from;
+    let peer;
+    if (fromId in peersList) peer = peersList[fromId];
+    else peer = createPC(fromId, false);
+
+    if (data.sdp) {
+      let sessionDescription = new RTCSessionDescription(data.sdp);
+      let callback = () => peer.remoteDescription.type === 'offer' ? peer.createAnswer(callbackSetLocal, logError) : null;
+      let callbackSetLocal = desc =>
+              peer.setLocalDescription(desc, callbackSetExchange, logError);
+      let callbackSetExchange = () =>
+              socket.emit('exchange', {to: fromId, sdp: peer.localDescription});
+      peer.setRemoteDescription(sessionDescription, callback, logError);
+    } else
+      peer.addIceCandidate(new RTCIceCandidate(data.candidate));
+  }
+
+  function leave(socketId) {
+    console.log('leave', socketId);
+    let peer = peersList[socketId];
+    if (peer != null) peer.close();
+    delete peersList[socketId];
+    dataChannel.close();
+    let video = document.getElementById('remoteView' + socketId);
+    if (video) video.remove();
+  }
+
+  socket.on('exchange', function(data) {
+    exchange(data);
+  });
+
+  socket.on('leave', function(socketId) {
+    leave(socketId);
+  });
+
+  socket.on('connect', function(data) {});
+
+  function logError(error) {
+    console.log('logError', error);
+  }
+
+  function initRoom() {
+    let roomId = document.getElementById('roomId').value;
+    dataRoomId = roomId;
+    if (roomId == 'NO Room Specified')
+      alert('missing');
+    else {
+      let roomContainer = document.getElementById('roomIdContainer');
+      roomContainer.parentElement.removeChild(roomContainer);
+      join(roomId);
+    }
+  }
+
+  function messageRoom() {
+    const text = document.getElementById('textRoomInput').value;
+    if (text == '')
+      alert('NO Message Entered');
+    else {
+      document.getElementById('textRoomInput').value = '';
+      let content = document.getElementById('messagesContent');
+      content.innerHTML = content.innerHTML + '<p>' + 'Me: ' + text + '</p>';
+      dataChannel.send(text);
+    }
+  }
+
+  getLocalStream();
+</script>
+</html>
