@@ -4,7 +4,7 @@
   "description": "",
   "main": "app.js",
   "engines": {
-    "node": "v4.1.0"
+    "node": "v4.7.0"
   },
   "scripts": {},
   "dependencies": {
