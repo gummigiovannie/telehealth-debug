@@ -1,15 +1,23 @@
 {
-  "name": "development-health",
-  "version": "0.0.1",
+  "name": "node",
+  "version": "1.0.0",
   "description": "",
   "main": "app.js",
   "engines": {
     "node": "v4.7.0"
   },
-  "scripts": {},
+  "scripts": {
+    "start": "node app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "dependencies": {
     "express": "^4.11.2",
     "open": "0.0.5",
     "socket.io": "1.3.4"
-  }
+  },
+  "keywords": [
+    "heroku"
+  ],
+  "author": "giovannies",
+  "license": "MIT"
 }
